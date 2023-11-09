@@ -8,6 +8,8 @@ import (
 	"log"
 
 	"github.com/hyperledger/fabric-contract-api-go/contractapi"
+
+	cuckoofilter "github.com/pherbke/credential-management/chaincode-go/smart-contract"
 )
 
 func main() {
