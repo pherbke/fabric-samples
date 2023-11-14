@@ -268,10 +268,10 @@ type SmartContract struct {
 // InitLedger initializes the ledger with a new cuckoo filter
 func (s *SmartContract) InitLedger(ctx contractapi.TransactionContextInterface, numElements uint, bucketSize uint) error {
 	filter := NewFilter(numElements, bucketSize)
-	return s.saveFilterState(ctx, filter)
+	return s.SaveFilterState(ctx, filter)
 }
 
-// Insert adds data to the cuckoo filter
+// Insert adds data to the cuckoo filter - Revoke a credential
 func (s *SmartContract) Insert(ctx contractapi.TransactionContextInterface, data string) error {
 	filter, err := s.LoadFilterState(ctx)
 	if err != nil {
@@ -280,7 +280,7 @@ func (s *SmartContract) Insert(ctx contractapi.TransactionContextInterface, data
 	if !filter.Insert([]byte(data)) {
 		return fmt.Errorf("failed to insert data '%s' into cuckoo filter", data)
 	}
-	return s.saveFilterState(ctx, filter)
+	return s.SaveFilterState(ctx, filter)
 }
 
 func (s *SmartContract) BatchInsert(ctx contractapi.TransactionContextInterface, dataItems []string) error {
@@ -295,7 +295,7 @@ func (s *SmartContract) BatchInsert(ctx contractapi.TransactionContextInterface,
 		}
 		successfulInserts++
 	}
-	if err := s.saveFilterState(ctx, filter); err != nil {
+	if err := s.SaveFilterState(ctx, filter); err != nil {
 		return fmt.Errorf("error saving filter state after %d successful insertions: %v", successfulInserts, err)
 	}
 	return nil
@@ -323,7 +323,7 @@ func (s *SmartContract) BatchLookup(ctx contractapi.TransactionContextInterface,
 	return results, nil
 }
 
-// Delete removes data from the cuckoo filter
+// Delete removes data from the cuckoo filter - Unrevoke a credential
 func (s *SmartContract) Delete(ctx contractapi.TransactionContextInterface, data string) error {
 	filter, err := s.LoadFilterState(ctx)
 	if err != nil {
@@ -334,7 +334,7 @@ func (s *SmartContract) Delete(ctx contractapi.TransactionContextInterface, data
 		return errors.New("failed to delete data from cuckoo filter")
 	}
 
-	return s.saveFilterState(ctx, filter)
+	return s.SaveFilterState(ctx, filter)
 }
 
 func (s *SmartContract) BatchDelete(ctx contractapi.TransactionContextInterface, dataItems []string) error {
@@ -345,14 +345,14 @@ func (s *SmartContract) BatchDelete(ctx contractapi.TransactionContextInterface,
 	for _, data := range dataItems {
 		filter.Delete([]byte(data)) // Ignore the result; attempt to delete whether it exists or not
 	}
-	if err := s.saveFilterState(ctx, filter); err != nil {
+	if err := s.SaveFilterState(ctx, filter); err != nil {
 		return fmt.Errorf("error saving filter state: %v", err)
 	}
 	return nil
 }
 
-// saveFilterState saves the current state of the cuckoo filter to the ledger
-func (s *SmartContract) saveFilterState(ctx contractapi.TransactionContextInterface, filter *Filter) error {
+// SaveFilterState saves the current state of the cuckoo filter to the ledger
+func (s *SmartContract) SaveFilterState(ctx contractapi.TransactionContextInterface, filter *Filter) error {
 	filterJSON, err := json.Marshal(filter)
 	if err != nil {
 		return err
@@ -490,5 +490,3 @@ func randi(i1, i2 uint) uint {
 	}
 	return i2
 }
-
-// Additional helper functions from util.go and bucket.go go here
