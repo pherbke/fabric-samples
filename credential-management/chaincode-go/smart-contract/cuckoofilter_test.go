@@ -12,15 +12,24 @@ import (
 	"github.com/dgrijalva/jwt-go"
 	"github.com/pherbke/credential-management/chaincode-go/mocks"
 	cuckoofilter "github.com/pherbke/credential-management/chaincode-go/smart-contract"
+	stakeholder "github.com/pherbke/credential-management/chaincode-go/smart-contract"
 	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
-	secp256k1 "github.com/ureeves/jwt-go-secp256k1"
 	mrand "math/rand"
 	"os"
 	"sync"
 	"testing"
 	"time"
 )
+
+func hashDataToUint64(data []byte) uint64 {
+	hash := sha256.Sum256(data)
+	var hashUint64 uint64
+	for _, b := range hash[:8] {
+		hashUint64 = hashUint64<<8 + uint64(b)
+	}
+	return hashUint64
+}
 
 func TestNewFilter(t *testing.T) {
 	filter := cuckoofilter.NewFilter(1000, cuckoofilter.DefaultBucketSize)
@@ -120,25 +129,12 @@ func TestDeleteNonExistent(t *testing.T) {
 }
 
 // Additional tests for edge cases and other functionalities can be added here
-func TestInsert_LargeData(t *testing.T) {
-	filter := cuckoofilter.NewFilter(1000, cuckoofilter.DefaultBucketSize)
-	largeData := make([]byte, 10000) // Large data
-	require.False(t, filter.Insert(largeData), "Expected insertion of large data to fail")
-}
 
 func TestInsert_Duplicate(t *testing.T) {
 	filter := cuckoofilter.NewFilter(1000, cuckoofilter.DefaultBucketSize)
 	data := []byte("duplicate data")
 	require.True(t, filter.Insert(data), "Expected first insertion to succeed")
 	require.False(t, filter.Insert(data), "Expected duplicate insertion to fail")
-}
-
-func TestInsertDataExceedingMaxLength(t *testing.T) {
-	filter := cuckoofilter.NewFilter(1000, cuckoofilter.DefaultBucketSize)
-	data := make([]byte, 1025) // Length exceeds the maximum allowed
-
-	// Expect insert to fail with data exceeding max length
-	require.False(t, filter.Insert(data), "Insert should fail with data exceeding max length")
 }
 
 func TestInsert_WithCuckooKicking(t *testing.T) {
@@ -150,12 +146,6 @@ func TestInsert_WithCuckooKicking(t *testing.T) {
 	require.True(t, filter.Insert(data1))
 	require.True(t, filter.Insert(data2))
 	require.True(t, filter.Insert(data3), "Expected insertion with cuckoo kicking to succeed")
-}
-
-func TestInsert_LargeDataFailure(t *testing.T) {
-	filter := cuckoofilter.NewFilter(10, 1)
-	largeData := make([]byte, 1025) // Data larger than 1024 bytes
-	require.False(t, filter.Insert(largeData), "Insertion of data larger than 1024 bytes should fail")
 }
 
 func TestRandomInsertDelete(t *testing.T) {
@@ -497,7 +487,8 @@ func TestUtilityFunctionEdgeCases(t *testing.T) {
 	// Example: testing getFingerprint with varying data sizes
 	for size := 1; size <= 16; size++ {
 		data := make([]byte, size)
-		fp := cuckoofilter.GetFingerprint(data, cuckoofilter.FingerPrintSize)
+		hashedData := hashDataToUint64(data)
+		fp := cuckoofilter.GetFingerprint(hashedData, cuckoofilter.FingerPrintSize)
 		require.Len(t, fp, cuckoofilter.FingerPrintSize, "Fingerprint should always have the specified length")
 	}
 }
@@ -532,8 +523,8 @@ func TestGetAltIndex(t *testing.T) {
 func TestGetFingerprint(t *testing.T) {
 	data := []byte("test data")
 	size := uint(8)
-
-	fp := cuckoofilter.GetFingerprint(data, size)
+	hashedData := hashDataToUint64(data)
+	fp := cuckoofilter.GetFingerprint(hashedData, size)
 	require.Len(t, fp, int(size), "Fingerprint length should match the specified size")
 }
 
@@ -784,13 +775,6 @@ func TestSaveFilterStateFailure(t *testing.T) {
 	// Assertions
 	require.Error(t, err)
 	require.Equal(t, "failed to save state", err.Error())
-}
-
-func TestFilterEdgeCases(t *testing.T) {
-	filter := cuckoofilter.NewFilter(10, 1)
-	largeData := make([]byte, 2000)
-
-	require.False(t, filter.Insert(largeData), "Insertion of large data should fail")
 }
 
 func TestBatchInsert_Failure(t *testing.T) {
@@ -1416,38 +1400,41 @@ func TestGetAltIndex2(t *testing.T) {
 //TODO: Test Case: Validate the random selection between two values.
 
 // Credential test
-
-// TODO: Add signature to credential
-// CreateTestCredentialWithSignature and store as jwt to test_credentialsigned.json get number of credentials as input
-
 // TODO: EBSI Signature update
 func CreateTestCredentials(numCredentials int) ([]string, error) {
 	var credentials []string
 	expirationDateStr := "2031-12-31T00:00:00Z"
 	// Parse the expiration date
 	expirationDate, err := time.Parse(time.RFC3339, expirationDateStr)
+	if err != nil {
+		return nil, fmt.Errorf("failed to parse expiration date: %v", err)
+	}
 
 	expUnix := expirationDate.Unix()
-
-	issuanceDate := time.Now().Format(time.RFC3339)
 	issuanceDateUnix := time.Now().Unix()
 
 	for i := 0; i < numCredentials; i++ {
 		privateKey, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
 		if err != nil {
-			return nil, err
+			return nil, fmt.Errorf("failed to generate ECDSA key: %v", err)
 		}
 
 		// Define JWT payload with EBSI Verifiable Credential structure
 		jwtPayload := map[string]interface{}{
+			"iss": fmt.Sprintf("did:ebsi:z23z7yq45RuqU7Gf4TWumVzK%d", i),
+			"sub": fmt.Sprintf("did:ebsi:zdpJRn3TSTHmYsYgQYK1pQGDMWP5JsiryVB962irWeWEV%d", i),
+			"exp": expUnix,
+			"nbf": issuanceDateUnix,
+			"iat": issuanceDateUnix,
+			"jti": fmt.Sprintf("urn:did:123456%d", i),
 			"vc": map[string]interface{}{
 				"@context":     []string{"https://www.w3.org/2018/credentials/v1"},
 				"id":           fmt.Sprintf("urn:did:123456%d", i),
 				"type":         []string{"VerifiableCredential", "VerifiableAttestation", "VerifiableId", "VerifiableAuthorisation"},
-				"issuer":       "did:ebsi:z23z7yq45RuqU7Gf4TWumVzK",
-				"issuanceDate": issuanceDate,
-				"validFrom":    issuanceDate,
-				"issued":       issuanceDate,
+				"issuer":       fmt.Sprintf("did:ebsi:z23z7yq45RuqU7Gf4TWumVzK%d", i),
+				"issuanceDate": time.Unix(issuanceDateUnix, 0).Format(time.RFC3339),
+				"validFrom":    time.Unix(issuanceDateUnix, 0).Format(time.RFC3339),
+				"issued":       time.Unix(issuanceDateUnix, 0).Format(time.RFC3339),
 				"credentialSubject": map[string]interface{}{
 					"id":                 fmt.Sprintf("did:ebsi:zdpJRn3TSTHmYsYgQYK1pQGDMWP5JsiryVB962irWeWEV%d", i),
 					"personalIdentifier": fmt.Sprintf("IT/DE/1234%d", i),
@@ -1461,29 +1448,19 @@ func CreateTestCredentials(numCredentials int) ([]string, error) {
 				},
 				"expirationDate": expirationDateStr,
 			},
-			"iat": issuanceDateUnix,
-			// exp in unix
-			"exp": expUnix, // exp in unix format
-			"nbf": issuanceDateUnix,
-
-			"iss": "did:ebsi:z23z7yq45RuqU7Gf4TWumVzK",
-			"jti": fmt.Sprintf("urn:did:123456%d", i),
-			"sub": fmt.Sprintf("did:ebsi:zdpJRn3TSTHmYsYgQYK1pQGDMWP5JsiryVB962irWeWEV%d", i),
 		}
 
 		// Create JWT token
-		// Token "alg": secp256k1
-		token := jwt.NewWithClaims(secp256k1.SigningMethodES256K, jwt.MapClaims(jwtPayload))
-		token.Header["kid"] = "did:ebsi:z23z7yq45RuqU7Gf4TWumVzK#keys-1"
+		token := jwt.NewWithClaims(jwt.SigningMethodES256, jwt.MapClaims(jwtPayload))
+		token.Header["kid"] = fmt.Sprintf("did:ebsi:z23z7yq45RuqU7Gf4TWumVzK%d#keys-1", i)
 
 		tokenString, err := token.SignedString(privateKey)
 		if err != nil {
-			return nil, err
+			return nil, fmt.Errorf("failed to sign JWT: %v", err)
 		}
 
 		credentials = append(credentials, tokenString)
 	}
-
 	// Save credentials to a file
 	fileName := "test_credentials.json"
 	file, err := os.Create(fileName)
@@ -1557,7 +1534,6 @@ func TestCredentialRevocationAndQuery(t *testing.T) {
 	// lookup inserted fingerprints
 	for _, fp := range fingerprints {
 		require.True(t, filter.Lookup([]byte(fp)), "Fingerprint should be found")
-		print("Fingerprint found: ", fp, "\n")
 	}
 
 	// delete fingerprints from the filter
@@ -1568,6 +1544,151 @@ func TestCredentialRevocationAndQuery(t *testing.T) {
 	// lookup deleted fingerprints
 	for _, fp := range fingerprints {
 		require.False(t, filter.Lookup([]byte(fp)), "Fingerprint should not be found")
-		print("Fingerprint not found: ", fp, "\n")
 	}
+}
+
+// TODO: Batch insert credentials with smart contract
+// using batch insert smartContract.BatchInsert
+// and batch lookup smartContract.BatchLookup
+func TestBatchCredentialRevocationAndQuery(t *testing.T) {
+	mockStub := new(mocks.MockChaincodeStubInterface)
+	mockTxContext := new(mocks.MockTransactionContext)
+	mockTxContext.On("GetStub").Return(mockStub)
+	mockTxContext.Stub = mockStub
+
+	filter := cuckoofilter.NewFilter(1000, cuckoofilter.DefaultBucketSize)
+	filterJSON, _ := json.Marshal(filter)
+	mockStub.On("GetState", "CuckooFilterState").Return(filterJSON, nil)
+	mockStub.On("PutState", "CuckooFilterState", mock.Anything).Return(nil)
+
+	smartContract := new(cuckoofilter.SmartContract)
+	credentials, err := CreateTestCredentials(1000)
+	require.NoError(t, err)
+	// Generate fingerprints from the credentials
+	fingerprints, err := GenerateFingerprints(credentials, 8)
+	require.NoError(t, err)
+
+	errI := smartContract.BatchInsert(mockTxContext, fingerprints)
+	require.NoError(t, errI, "Batch insert should not fail")
+
+	err = smartContract.SaveFilterState(mockTxContext, filter)
+	require.NoError(t, err)
+
+	// Load the filter state from the ledger
+	mockStub.On("GetState", "CuckooFilterState").Return(filterJSON, nil)
+	filter, err = smartContract.LoadFilterState(mockTxContext)
+	require.NoError(t, err)
+
+	// lookup inserted fingerprints
+	_, err = smartContract.BatchLookup(mockTxContext, fingerprints)
+	require.NoError(t, err)
+
+	// delete fingerprints batchwise from the filter
+	err = smartContract.BatchDelete(mockTxContext, fingerprints)
+	require.NoError(t, err)
+
+	results, _ := smartContract.BatchLookup(mockTxContext, fingerprints)
+	require.False(t, results[fingerprints[0]], "Fingerprint should not be found")
+}
+
+func calculateErrorRate(filter *cuckoofilter.Filter, testData []string, testSize int) float64 {
+	falsePositives := 0
+	for i := 0; i < testSize; i++ {
+		data := testData[i]
+		if filter.Lookup([]byte(data)) {
+			falsePositives++
+		}
+	}
+	return float64(falsePositives) / float64(testSize)
+}
+
+func TestErrorRate(t *testing.T) {
+	filterSize := 1000
+	testSize := 1000 // Number of items to test for false positives
+	filter := cuckoofilter.NewFilter(uint(filterSize), cuckoofilter.DefaultBucketSize)
+
+	// Create and insert credentials
+	credentials, err := CreateTestCredentials(filterSize)
+	require.NoError(t, err)
+
+	fingerprints, err := GenerateFingerprints(credentials, 8)
+	require.NoError(t, err)
+
+	for _, fp := range fingerprints {
+		filter.Insert([]byte(fp))
+	}
+
+	// Generate another set of credentials for testing false positives
+	testCredentials, err := CreateTestCredentials(testSize)
+	require.NoError(t, err)
+
+	testFingerprints, err := GenerateFingerprints(testCredentials, 8)
+	require.NoError(t, err)
+
+	// Calculate error rate
+	errorRate := calculateErrorRate(filter, testFingerprints, testSize)
+	fmt.Printf("Measured Error Rate: %f\n", errorRate)
+
+	// Define an acceptable error rate
+	acceptableErrorRate := 0.03 // 3%
+	require.LessOrEqual(t, errorRate, acceptableErrorRate, "Error rate should be within acceptable limits")
+}
+
+func TestCredentialVerificationAndRevocation(t *testing.T) {
+	stakeholderContract := new(stakeholder.StakeholderManagementContract)
+	smartContract := new(cuckoofilter.SmartContract)
+	mockTxContext := new(mocks.MockTransactionContext)
+	mockStub := new(mocks.MockChaincodeStubInterface)
+
+	// Generate DIDs for the issuer and holder
+	issuerDIDResponse, _ := stakeholderContract.GenerateDID(mockTxContext, "issuer")
+	holderDIDResponse, _ := stakeholderContract.GenerateDID(mockTxContext, "holder")
+	// Issue a credential from the issuer to the holder
+	_, _ = stakeholderContract.IssuingCredential(mockTxContext, issuerDIDResponse.DID, holderDIDResponse.DID)
+
+	// Create a filter and manually insert the test data
+	filter := cuckoofilter.NewFilter(100, 4)
+	testData, _ := smartContract.ReadJWTFromFile(mockTxContext, holderDIDResponse.DID)
+
+	// Revoke Credential
+	filter.Insert([]byte(testData)) // Manually inserting the data into the filter
+
+	// Marshal the updated filter state with the test data
+	filterJSON, _ := json.Marshal(filter)
+	// Mock GetState to return the updated filter state
+	mockStub.On("GetState", "CuckooFilterState").Return(filterJSON, nil)
+	mockTxContext.On("GetStub").Return(mockStub)
+	mockTxContext.Stub = mockStub
+
+	// Call the Lookup function
+	// Verify the credential from the verifier's perspective
+	isValid, err := stakeholderContract.VerifyingCredential(mockTxContext, testData, "verifier", holderDIDResponse.DID, issuerDIDResponse.DID)
+	require.NoError(t, err, "VerifyingCredential should not return an error")
+	require.True(t, isValid, "VerifyingCredential should return true for a valid credential")
+
+	found, err := smartContract.Lookup(mockTxContext, testData)
+	// Assertions
+	require.NoError(t, err)
+	require.True(t, found, "Data should be found in cuckoo filter")
+
+	// Unrevoke the credential
+	// Mock PutState to simulate successful delete operation
+	mockStub.On("PutState", "CuckooFilterState", mock.Anything).Return(nil)
+	err = smartContract.Delete(mockTxContext, testData)
+	require.NoError(t, err, "Delete operation should succeed")
+
+	// Update the filter state in the ledger
+	filter.Delete([]byte(testData))              // Delete the data from the filter
+	updatedFilterJSON, _ := json.Marshal(filter) // Marshal the updated filter state
+
+	// Mock the updated state
+	mockStub.On("GetState", "CuckooFilterState").Return(updatedFilterJSON, nil)
+	mockStub.On("PutState", "CuckooFilterState", updatedFilterJSON).Return(nil)
+
+	// TODO: print logs for credential status
+	// Verify the deletion
+	_, err = smartContract.LoadFilterState(mockTxContext) // Reload the filter state
+	require.NoError(t, err, "Loading updated filter state should succeed")
+	found = filter.Lookup([]byte(testData))
+	require.False(t, found, "Credential should not be found after deletion")
 }

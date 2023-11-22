@@ -8,6 +8,7 @@ import (
 	metro "github.com/dgryski/go-metro"
 	"github.com/hyperledger/fabric-contract-api-go/contractapi"
 	"math/rand"
+	"os"
 	"time"
 )
 
@@ -42,13 +43,14 @@ func (f *Filter) Capacity() uint {
 
 // insert a fingerprint into a bucket. Returns true if there was enough space and insertion succeeded.
 func (f *Filter) Insert(data []byte) bool {
-	if len(data) == 0 || len(data) > 1024 || f.Lookup(data) {
+	if len(data) == 0 || f.Lookup(data) {
 		return false
 	}
 
 	// Set a stricter threshold for overfilling
 	overfillThreshold := uint(float32(f.Capacity()) * 1.7)
 
+	// TODO: Split GetIndexAndFingerprint into two functions
 	i1, fp := GetIndexAndFingerprint(data, f.BucketIndexMask, FingerPrintSize) // Assuming a fixed fingerprint size of 8
 	i2 := GetAltIndex(fp, i1, f.BucketIndexMask)
 
@@ -278,7 +280,7 @@ func (s *SmartContract) Insert(ctx contractapi.TransactionContextInterface, data
 		return fmt.Errorf("error loading filter state: %v", err)
 	}
 	if !filter.Insert([]byte(data)) {
-		return fmt.Errorf("failed to insert data '%s' into cuckoo filter", data)
+		return fmt.Errorf("failed to insert data '%s' into cuckoo filter", []byte(data))
 	}
 	return s.SaveFilterState(ctx, filter)
 }
@@ -380,6 +382,19 @@ func (s *SmartContract) LoadFilterState(ctx contractapi.TransactionContextInterf
 	return &filter, nil
 }
 
+func (s *SmartContract) ReadJWTFromFile(ctx contractapi.TransactionContextInterface, holderDID string) (string, error) {
+	// Construct the filename from the holderDID
+	filename := fmt.Sprintf("./holderCredentials/%s.jwt", holderDID)
+
+	// Read the JWT from the file
+	jwtBytes, err := os.ReadFile(filename)
+	if err != nil {
+		return "", fmt.Errorf("error reading JWT from file: %v", err)
+	}
+
+	return string(jwtBytes), nil
+}
+
 // NewFilter creates a new cuckoo filter with the specified number of elements
 func NewFilter(numElements uint, bucketSize uint) *Filter {
 	numBuckets := GetNextPow2(uint64(numElements))
@@ -407,6 +422,9 @@ func (f *Filter) Lookup(data []byte) bool {
 	i2 := GetAltIndex(fp, i1, f.BucketIndexMask)
 	if i2 >= uint(len(f.Buckets)) {
 		return false
+	}
+	if f.Buckets[i1].contains(fp) || f.Buckets[i2].contains(fp) {
+		fmt.Println("Credential is revoked")
 	}
 	return f.Buckets[i1].contains(fp) || f.Buckets[i2].contains(fp)
 }
@@ -437,19 +455,11 @@ func GetAltIndex(fp []byte, i, bucketIndexMask uint) uint {
 }
 
 // GetFingerprint generates a fingerprint from a given hash value.
-func GetFingerprint(data []byte, fingerprintSize uint) []byte {
-	hash := metro.Hash64(data, 1337)
+func GetFingerprint(hash uint64, fingerprintSize uint) []byte {
 	fp := make([]byte, fingerprintSize)
-
 	for i := uint(0); i < fingerprintSize; i++ {
-		if i < 8 {
-			fp[i] = byte(hash >> (8 * i))
-		} else {
-			// If the fingerprint size is larger than the hash size, pad with zeros.
-			fp[i] = 0
-		}
+		fp[i] = byte(hash >> (8 * i))
 	}
-
 	return fp
 }
 
@@ -463,9 +473,10 @@ func deterministicSelector(data []byte, i1, i2 uint) uint {
 
 // GetIndexAndFingerprint calculates the primary bucket index and fingerprint for given data.
 func GetIndexAndFingerprint(data []byte, bucketIndexMask uint, fingerprintSize uint) (uint, []byte) {
-	fp := GetFingerprint(data, fingerprintSize)
-	// Use least significant bits for deriving index.
-	i1 := uint(metro.Hash64(data, 1337)) & bucketIndexMask
+	hash := metro.Hash64(data, 1337)
+	// print the size of the hash
+	fp := GetFingerprint(hash, fingerprintSize)
+	i1 := uint(hash>>32) & bucketIndexMask
 	return i1, fp
 }
 
