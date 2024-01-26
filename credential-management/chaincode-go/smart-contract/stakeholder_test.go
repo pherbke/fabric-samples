@@ -29,7 +29,7 @@ func TestGenerateDID(t *testing.T) {
 
 	// Extract the base58 encoded part of the DID
 	encodedPart := strings.TrimPrefix(didResponse.DID, "did:key:")
-	t.Logf("Encoded part of DID: %s", encodedPart)
+	//t.Logf("Encoded part of DID: %s", encodedPart)
 
 	// Decode the encoded part from base58
 	encoding, decoded, err := multibase.Decode(encodedPart)

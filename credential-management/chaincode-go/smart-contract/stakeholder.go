@@ -142,6 +142,35 @@ func (s *StakeholderManagementContract) IssuingCredential(ctx contractapi.Transa
 	return credential, nil
 }
 
+func (s *StakeholderManagementContract) IssuingBatchCredentials(ctx contractapi.TransactionContextInterface, issuerDID, holderDID string, numCredentials int) ([]string, error) {
+	var issuedCredentials []string
+	privateKey, err := s.loadPrivateKey(ctx, "issuer", issuerDID)
+	if err != nil {
+		return nil, fmt.Errorf("failed to load private key: %v", err)
+	}
+
+	for i := 0; i < numCredentials; i++ {
+		credentialID := fmt.Sprintf("%s_%d", holderDID, i)
+		credential, err := CreateAndSignBatchCredential(issuerDID, privateKey, holderDID, credentialID)
+		if err != nil {
+			return nil, fmt.Errorf("failed to create and sign credential: %v", err)
+		}
+		token := jwt.NewWithClaims(jwt.SigningMethodES256, jwt.MapClaims{"credential": credential})
+		tokenString, err := token.SignedString(privateKey)
+		if err != nil {
+			return nil, fmt.Errorf("failed to sign JWT: %v", err)
+		}
+
+		filename := fmt.Sprintf("./holderCredentials/%s.jwt", credentialID)
+		if err := os.WriteFile(filename, []byte(tokenString), 0600); err != nil {
+			return nil, fmt.Errorf("error writing JWT to file: %v", err)
+		}
+
+		issuedCredentials = append(issuedCredentials, tokenString)
+	}
+	return issuedCredentials, nil
+}
+
 // VerifyingCredential verifies the signature of a given credential
 func (s *StakeholderManagementContract) VerifyingCredential(ctx contractapi.TransactionContextInterface, jwtString string, role string, holderDID string, issuerDID string) (bool, error) {
 	// Determine the filename based on the role
@@ -238,7 +267,7 @@ func (s *StakeholderManagementContract) VerifyingCredential(ctx contractapi.Tran
 	if expirationDate.Before(time.Now()) {
 		return false, fmt.Errorf("credential is expired")
 	}
-	fmt.Println("Credential is valid ", jwtString[0:10])
+	// fmt.Println("Credential is valid ", jwtString[0:10])
 	return true, nil
 }
 

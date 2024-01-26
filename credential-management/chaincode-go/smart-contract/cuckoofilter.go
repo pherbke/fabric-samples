@@ -267,10 +267,17 @@ type SmartContract struct {
 	contractapi.Contract
 }
 
-// InitLedger initializes the ledger with a new cuckoo filter
-func (s *SmartContract) InitLedger(ctx contractapi.TransactionContextInterface, numElements uint, bucketSize uint) error {
+// Init initializes the ledger with a new cuckoo filter
+func (s *SmartContract) Init(ctx contractapi.TransactionContextInterface, numElements uint, bucketSize uint) error {
 	filter := NewFilter(numElements, bucketSize)
-	return s.SaveFilterState(ctx, filter)
+	// Save the cuckoo filter state
+	err := s.SaveFilterState(ctx, filter)
+	if err != nil {
+		return err
+	}
+
+	// Mark the chaincode as initialized
+	return ctx.GetStub().PutState("Initialized", []byte("true"))
 }
 
 // Insert adds data to the cuckoo filter - Revoke a credential
@@ -290,12 +297,15 @@ func (s *SmartContract) BatchInsert(ctx contractapi.TransactionContextInterface,
 	if err != nil {
 		return fmt.Errorf("error loading filter state: %v", err)
 	}
+
 	successfulInserts := 0
 	for _, data := range dataItems {
 		if !filter.Insert([]byte(data)) {
 			return fmt.Errorf("failed to insert data '%s' into cuckoo filter after %d successful insertions", data, successfulInserts)
 		}
 		successfulInserts++
+		//fmt.Printf("Successful inserts so far: %d\n", successfulInserts)
+
 	}
 	if err := s.SaveFilterState(ctx, filter); err != nil {
 		return fmt.Errorf("error saving filter state after %d successful insertions: %v", successfulInserts, err)
@@ -412,20 +422,25 @@ func NewFilter(numElements uint, bucketSize uint) *Filter {
 // Lookup checks if the data is present in the cuckoo filter
 func (f *Filter) Lookup(data []byte) bool {
 	// Check if Buckets slice is initialized and not empty
+
 	if f.Buckets == nil || len(f.Buckets) == 0 {
 		return false
 	}
 	i1, fp := GetIndexAndFingerprint(data, f.BucketIndexMask, FingerPrintSize)
+
 	if i1 >= uint(len(f.Buckets)) {
 		return false
 	}
+
 	i2 := GetAltIndex(fp, i1, f.BucketIndexMask)
 	if i2 >= uint(len(f.Buckets)) {
 		return false
 	}
-	if f.Buckets[i1].contains(fp) || f.Buckets[i2].contains(fp) {
-		fmt.Println("Credential is revoked")
-	}
+	/*
+		if f.Buckets[i1].contains(fp) || f.Buckets[i2].contains(fp) {
+			fmt.Println("Credential is revoked")
+		}
+	*/
 	return f.Buckets[i1].contains(fp) || f.Buckets[i2].contains(fp)
 }
 

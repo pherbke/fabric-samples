@@ -78,6 +78,38 @@ func CreateAndSignCredential(issuerDID string, issuerPrivateKey *ecdsa.PrivateKe
 	return signedCredential, nil
 }
 
+func CreateAndSignBatchCredential(issuerDID string, issuerPrivateKey *ecdsa.PrivateKey, subjectID string, credentialID string) (*VerifiableCredential, error) {
+	// Create the credential
+	credential := VerifiableCredential{
+		Context: []string{
+			"https://www.w3.org/2018/credentials/v1",
+			"https://www.w3.org/2018/credentials/examples/v1",
+		},
+		ID:             "http://example.edu/credentials/1872" + credentialID,
+		Type:           []string{"VerifiableCredential", "AlumniCredential"},
+		Issuer:         issuerDID,
+		IssuanceDate:   time.Now(),
+		ExpirationDate: time.Now().AddDate(10, 0, 0),
+		CredentialSubject: CredentialSubject{
+			ID: subjectID,
+			AlumniOf: Alumni{
+				ID: "did:example:c276e12ec21ebfeb1f712ebc6f1",
+				Name: []Name{
+					{Value: "Example University", Lang: "en"},
+					{Value: "Exemple d'Université", Lang: "fr"},
+				},
+			},
+		},
+	}
+
+	// Sign the credential
+	signedCredential, err := SignCredential(&credential, issuerPrivateKey)
+	if err != nil {
+		return nil, err
+	}
+	return signedCredential, nil
+}
+
 // SignCredential signs the credential and returns it
 func SignCredential(credential *VerifiableCredential, privateKey *ecdsa.PrivateKey) (*VerifiableCredential, error) {
 	// Serialize the credential excluding the Proof

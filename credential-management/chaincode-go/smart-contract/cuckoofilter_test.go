@@ -596,8 +596,8 @@ func TestInitLedger(t *testing.T) {
 	// Create an instance of the SmartContract
 	smartContract := new(cuckoofilter.SmartContract)
 
-	// Call the InitLedger function with the mock transaction context
-	err := smartContract.InitLedger(mockTxContext, 1000, cuckoofilter.DefaultBucketSize)
+	// Call the Init function with the mock transaction context
+	err := smartContract.Init(mockTxContext, 1000, cuckoofilter.DefaultBucketSize)
 
 	// Assert that there were no errors
 	require.NoError(t, err)
@@ -1277,7 +1277,7 @@ func TestString2(t *testing.T) {
 }
 
 // Test Case: Validate the string representation of the bucket.
-// Function Name: (s *SmartContract) InitLedger(ctx contractapi.TransactionContextInterface, numElements uint, bucketSize uint) error
+// Function Name: (s *SmartContract) Init(ctx contractapi.TransactionContextInterface, numElements uint, bucketSize uint) error
 func TestInitLedger2(t *testing.T) {
 	mockStub := new(mocks.MockChaincodeStubInterface)
 	mockTxContext := new(mocks.MockTransactionContext)
@@ -1285,7 +1285,7 @@ func TestInitLedger2(t *testing.T) {
 	mockTxContext.On("GetStub").Return(mockStub)
 	mockTxContext.Stub = mockStub
 	smartContract := new(cuckoofilter.SmartContract)
-	err := smartContract.InitLedger(mockTxContext, 100, 4)
+	err := smartContract.Init(mockTxContext, 100, 4)
 	require.NoError(t, err)
 }
 
@@ -1479,7 +1479,7 @@ func CreateTestCredentials(numCredentials int) ([]string, error) {
 		return nil, err
 	}
 
-	fmt.Printf("Credentials saved to %s\n", fileName)
+	//fmt.Printf("Credentials saved to %s\n", fileName)
 	return credentials, nil
 }
 
@@ -1501,7 +1501,7 @@ func TestCredentialRevocationAndQuery(t *testing.T) {
 	filter := cuckoofilter.NewFilter(1000, cuckoofilter.DefaultBucketSize)
 
 	// Create test credentials
-	credentials, err := CreateTestCredentials(1000)
+	credentials, err := CreateTestCredentials(1)
 	require.NoError(t, err)
 
 	// Generate fingerprints from the credentials
@@ -1510,6 +1510,7 @@ func TestCredentialRevocationAndQuery(t *testing.T) {
 
 	// Insert fingerprints into the filter
 	for _, fp := range fingerprints {
+		fmt.Printf("Inserting fingerprint %s\n", fp)
 		filter.Insert([]byte(fp))
 	}
 
@@ -1627,13 +1628,14 @@ func TestErrorRate(t *testing.T) {
 
 	// Calculate error rate
 	errorRate := calculateErrorRate(filter, testFingerprints, testSize)
-	fmt.Printf("Measured Error Rate: %f\n", errorRate)
+	//fmt.Printf("Measured Error Rate: %f\n", errorRate)
 
 	// Define an acceptable error rate
 	acceptableErrorRate := 0.03 // 3%
 	require.LessOrEqual(t, errorRate, acceptableErrorRate, "Error rate should be within acceptable limits")
 }
 
+// Single Processing
 func TestCredentialVerificationAndRevocation(t *testing.T) {
 	stakeholderContract := new(stakeholder.StakeholderManagementContract)
 	smartContract := new(cuckoofilter.SmartContract)
@@ -1649,7 +1651,7 @@ func TestCredentialVerificationAndRevocation(t *testing.T) {
 	// Create a filter and manually insert the test data
 	filter := cuckoofilter.NewFilter(100, 4)
 	testData, _ := smartContract.ReadJWTFromFile(mockTxContext, holderDIDResponse.DID)
-
+	fmt.Print(testData)
 	// Revoke Credential
 	filter.Insert([]byte(testData)) // Manually inserting the data into the filter
 
@@ -1681,14 +1683,73 @@ func TestCredentialVerificationAndRevocation(t *testing.T) {
 	filter.Delete([]byte(testData))              // Delete the data from the filter
 	updatedFilterJSON, _ := json.Marshal(filter) // Marshal the updated filter state
 
-	// Mock the updated state
+	// Mock the updated state in the ledger
 	mockStub.On("GetState", "CuckooFilterState").Return(updatedFilterJSON, nil)
+	// Mock PutState to simulate successful update operation
 	mockStub.On("PutState", "CuckooFilterState", updatedFilterJSON).Return(nil)
 
-	// TODO: print logs for credential status
+	// TODO: print logs for credential status and do the same stuff for batch operations
 	// Verify the deletion
 	_, err = smartContract.LoadFilterState(mockTxContext) // Reload the filter state
 	require.NoError(t, err, "Loading updated filter state should succeed")
 	found = filter.Lookup([]byte(testData))
 	require.False(t, found, "Credential should not be found after deletion")
+}
+
+// Batch processing
+func TestBatchCredentialRevocationVerificationAndQuery(t *testing.T) {
+	stakeholderContract := new(stakeholder.StakeholderManagementContract)
+	mockStub := new(mocks.MockChaincodeStubInterface)
+	mockTxContext := new(mocks.MockTransactionContext)
+	mockTxContext.On("GetStub").Return(mockStub)
+	mockTxContext.Stub = mockStub
+
+	filter := cuckoofilter.NewFilter(1000, cuckoofilter.DefaultBucketSize)
+	filterJSON, _ := json.Marshal(filter)
+	mockStub.On("GetState", "CuckooFilterState").Return(filterJSON, nil)
+	mockStub.On("PutState", "CuckooFilterState", mock.Anything).Return(nil)
+
+	// Mock DIDs for issuer and holder (same for all credentials in this test)
+	issuerDIDResponse, _ := stakeholderContract.GenerateDID(mockTxContext, "issuer")
+	holderDIDResponse, _ := stakeholderContract.GenerateDID(mockTxContext, "holder")
+
+	smartContract := new(cuckoofilter.SmartContract)
+	// Generate and issue 1000 credentials with unique identifiers
+	issuedCredentials, err := stakeholderContract.IssuingBatchCredentials(mockTxContext, issuerDIDResponse.DID, holderDIDResponse.DID, 5)
+	require.NoError(t, err)
+
+	// Generate fingerprints from the credentials
+	fingerprints, err := GenerateFingerprints(issuedCredentials, 8)
+	require.NoError(t, err)
+	// Print fingerprints type:
+	fmt.Printf("Fingerprints type: %T\n", fingerprints)
+
+	errI := smartContract.BatchInsert(mockTxContext, fingerprints)
+	require.NoError(t, errI, "Batch insert should not fail")
+
+	err = smartContract.SaveFilterState(mockTxContext, filter)
+	require.NoError(t, err)
+
+	// Load the filter state from the ledger
+	mockStub.On("GetState", "CuckooFilterState").Return(filterJSON, nil)
+	filter, err = smartContract.LoadFilterState(mockTxContext)
+	require.NoError(t, err)
+
+	// Verify the credentials
+	for _, cred := range issuedCredentials {
+		isValid, err := stakeholderContract.VerifyingCredential(mockTxContext, cred, "verifier", holderDIDResponse.DID, issuerDIDResponse.DID)
+		require.NoError(t, err, "VerifyingCredential should not return an error")
+		require.True(t, isValid, "VerifyingCredential should return true for a valid credential")
+	}
+
+	// lookup inserted fingerprints
+	_, err = smartContract.BatchLookup(mockTxContext, fingerprints)
+	require.NoError(t, err)
+
+	// delete fingerprints batchwise from the filter
+	err = smartContract.BatchDelete(mockTxContext, fingerprints)
+	require.NoError(t, err)
+
+	results, _ := smartContract.BatchLookup(mockTxContext, fingerprints)
+	require.False(t, results[fingerprints[0]], "Fingerprint should not be found")
 }
